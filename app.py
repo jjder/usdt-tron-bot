@@ -1,6 +1,7 @@
 import os
 import threading
 import logging
+import asyncio
 import requests
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -19,11 +20,11 @@ server = Flask(__name__)
 
 @server.route("/")
 def home():
-    return "Bot is running 24/7!"
+    return "Bot is running healthy 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
-    server.run(host="0.0.0.0", port=port)
+    server.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # ----------------- CONFIGURATION -----------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "9034747442:AAGTyaKiyCjS02QWpo8Bk2ilZUsmP6ghyJc")
@@ -56,13 +57,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text(
             welcome_text, parse_mode="HTML", reply_markup=get_start_over_keyboard()
         )
-    else:
+    elif update.message:
         await update.message.reply_text(
             welcome_text, parse_mode="HTML", reply_markup=get_start_over_keyboard()
         )
     return AMOUNT
 
-# ૧. રકમ સ્વીકારવી ($1,000 થી $100,000)
+# ૧. રકમ સ્વીકારવી
 async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().replace(",", "")
     
@@ -97,7 +98,6 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_recipient_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_wallet = update.message.text.strip()
 
-    # TRON એડ્રેસ વેલિડેશન (T થી શરૂ થતું અને 34 અક્ષરનું હોવું જોઈએ)
     if not (user_wallet.startswith("T") and len(user_wallet) == 34):
         await update.message.reply_text(
             "⚠️ Invalid TRC-20 Address format. A TRON address starts with 'T' and is 34 characters long.\n"
@@ -147,7 +147,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "start_over":
         return await start(update, context)
 
-# ૪. ટ્રાન્ઝેક્શન હેશ સ્વીકારવી અને સબમિટ કરવું
+# ૪. ટ્રાન્ઝેક્શન હેશ સ્વીકારવી
 async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tx_hash = update.message.text.strip()
     user = update.effective_user
@@ -163,7 +163,6 @@ async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return AWAIT_HASH
 
-    # ઓન-ચેઇન સ્ટેટસ ચેક (TronScan API)
     status_note = "Pending Verification"
     try:
         url = f"https://apilist.tronscanapi.com/api/transaction-info?hash={tx_hash}"
@@ -192,7 +191,6 @@ async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"NEW ORDER | User: @{user.username} ({user.id}) | Req: {requested} | To: {user_wallet} | Fee: {fee} | Tx: {tx_hash}"
     )
 
-    # એડમિન એલર્ટ
     if ADMIN_CHAT_ID:
         admin_text = (
             f"🔔 <b>New Payout Order Submitted</b>\n\n"
@@ -221,7 +219,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-def run_bot():
+def main():
+    # Flask સર્વર બેકગ્રાઉન્ડ થ્રેડમાં
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+
+    # Telegram Bot સેટઅપ
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -253,8 +256,10 @@ def run_bot():
     )
 
     app.add_handler(conv_handler)
-    app.run_polling()
+
+    print("Starting bot polling...")
+    # drop_pending_updates=True રાખવાથી જૂના ફસાયેલા મેસેજ ક્લિયર થઈ જશે અને નવો મેસેજ તરત પ્રોસેસ થશે
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_web, daemon=True).start()
-    run_bot()
+    main()
