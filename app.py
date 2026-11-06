@@ -1,7 +1,6 @@
 import os
 import threading
 import logging
-import asyncio
 import requests
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-# ----------------- FLASK DUMMY SERVER (FOR RENDER) -----------------
+# ----------------- FLASK DUMMY SERVER (PORT BINDING FOR RENDER) -----------------
 server = Flask(__name__)
 
 @server.route("/")
@@ -27,7 +26,7 @@ def run_web():
     server.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # ----------------- CONFIGURATION -----------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "9034747442:AAGTyaKiyCjS02QWpo8Bk2ilZUsmP6ghyJc")
+BOT_TOKEN = "9034747442:AAGTyaKiyCjS02QWpo8Bk2ilZUsmP6ghyJc"
 ADMIN_WALLET = "TBZbn9gnVwg2Jam5YdVgjzDxtRyoEr6DYr"
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", None)
 
@@ -63,7 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     return AMOUNT
 
-# ૧. રકમ સ્વીકારવી
+# ૧. રકમ સ્વીકારવી ($1,000 થી $100,000)
 async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().replace(",", "")
     
@@ -147,7 +146,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "start_over":
         return await start(update, context)
 
-# ૪. ટ્રાન્ઝેક્શન હેશ સ્વીકારવી
+# ૪. ટ્રાન્ઝેક્શન હેશ સ્વીકારવી અને સબમિટ કરવું
 async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tx_hash = update.message.text.strip()
     user = update.effective_user
@@ -166,9 +165,8 @@ async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_note = "Pending Verification"
     try:
         url = f"https://apilist.tronscanapi.com/api/transaction-info?hash={tx_hash}"
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        data = res.json()
-        if data.get("confirmed"):
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        if res.json().get("confirmed"):
             status_note = "Confirmed on TRON Network"
     except Exception:
         pass
@@ -182,9 +180,8 @@ async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Our team will verify the payment and release your funds shortly."
     )
 
-    keyboard = [[InlineKeyboardButton("🔄 Start Over", callback_data="start_over")]]
     await update.message.reply_text(
-        success_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard)
+        success_text, parse_mode="HTML", reply_markup=get_start_over_keyboard()
     )
 
     logging.info(
@@ -221,10 +218,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     # Flask સર્વર બેકગ્રાઉન્ડ થ્રેડમાં
-    web_thread = threading.Thread(target=run_web, daemon=True)
-    web_thread.start()
+    threading.Thread(target=run_web, daemon=True).start()
 
-    # Telegram Bot સેટઅપ
+    # Telegram Bot
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -250,15 +246,16 @@ def main():
             ],
         },
         fallbacks=[
+            CommandHandler("start", start),      # યુઝર વચ્ચે પણ /start લખે તો રીસેટ થાય
             CommandHandler("cancel", cancel),
             CallbackQueryHandler(button_callback, pattern="^start_over$")
         ],
+        allow_reentry=True   # ગમે ત્યારે ફરીથી /start કામ કરશે
     )
 
     app.add_handler(conv_handler)
 
     print("Starting bot polling...")
-    # drop_pending_updates=True રાખવાથી જૂના ફસાયેલા મેસેજ ક્લિયર થઈ જશે અને નવો મેસેજ તરત પ્રોસેસ થશે
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
